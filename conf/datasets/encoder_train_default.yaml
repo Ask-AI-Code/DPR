@@ -44,3 +44,10 @@ curatedtrec_dev:
   _target_: dpr.data.biencoder_data.JsonQADataset
   file: data.retriever.curatedtrec-dev
     
+askai_train:
+  _target_: dpr.data.biencoder_data.JsonQADataset
+  file: data.retriever.ask-ai-dpr-train
+
+askai_dev:
+  _target_: dpr.data.biencoder_data.JsonQADataset
+  file: data.retriever.ask-ai-dpr-dev
