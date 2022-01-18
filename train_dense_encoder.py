@@ -277,8 +277,6 @@ class BiEncoderTrainer(object):
                 shuffle=False,
             )
 
-            biencoder_input = BiEncoderBatch(**move_to_device(biencoder_input._asdict(), cfg.device))
-
             # get the token to be used for representation selection
             ds_cfg = self.ds_cfg.dev_datasets[dataset]
             rep_positions = ds_cfg.selector.get_positions(biencoder_input.question_ids, self.tensorizer)
@@ -371,6 +369,9 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
+
+            biencoder_input = BiEncoderBatch(**move_to_device(biencoder_input._asdict(), cfg.device))
+
             total_ctxs = len(ctx_represenations)
             ctxs_ids = biencoder_input.context_ids
             ctxs_segments = biencoder_input.ctx_segments
