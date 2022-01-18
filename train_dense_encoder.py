@@ -225,14 +225,14 @@ class BiEncoderTrainer(object):
             validation_loss = 0
         else:
             if epoch >= cfg.val_av_rank_start_epoch:
-                validation_loss = self.validate_average_rank()
+                validation_loss = self.validate_average_rank(iteration, epoch)
                 wandb.log({
                     "Iteration": iteration,
                     "Epoch": epoch,
                     "Dev Average Rank loss": validation_loss,
                 })
             else:
-                validation_loss = self.validate_nll()
+                validation_loss = self.validate_nll(iteration, epoch)
                 wandb.log({
                     "Iteration": iteration,
                     "Epoch": epoch,
@@ -248,7 +248,7 @@ class BiEncoderTrainer(object):
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
 
-    def validate_nll(self) -> float:
+    def validate_nll(self, iteration: int, epoch: int) -> float:
         logger.info("NLL validation ...")
         cfg = self.cfg
         self.biencoder.eval()
@@ -315,9 +315,18 @@ class BiEncoderTrainer(object):
             total_samples,
             correct_ratio,
         )
+
+        wandb.log({
+            "Iteration": iteration,
+            "Epoch": epoch,
+            "Dev Correct Predictions Ratio": correct_ratio,
+            "Dev Total Correct Predictions": total_correct_predictions,
+            "Dev Total Samples": total_samples,
+        })
+
         return total_loss
 
-    def validate_average_rank(self) -> float:
+    def validate_average_rank(self, iteration: int, epoch: int) -> float:
         """
         Validates biencoder model using each question's gold passage's rank across the set of passages from the dataset.
         It generates vectors for specified amount of negative passages from each question (see --val_av_rank_xxx params)
@@ -451,6 +460,14 @@ class BiEncoderTrainer(object):
 
         av_rank = float(rank / q_num)
         logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
+
+        wandb.log({
+            "Iteration": iteration,
+            "Epoch": epoch,
+            "Dev Average Rank Accuracy": av_rank,
+            "Dev Total Questions": q_num,
+        })
+
         return av_rank
 
     def _train_epoch(
@@ -772,7 +789,7 @@ def main(cfg: DictConfig):
     wandb.init(project="dpr",
                entity="ask-ai",
                name=f"dpr_lr-{cfg.train.learning_rate}_bs-{cfg.train.batch_size}_"
-                    f"{datetime.now().strftime('%d%m%Y_%H%M%S')}",
+                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                config=flatten_dict(cfg))
 
     if cfg.train.gradient_accumulation_steps < 1:
