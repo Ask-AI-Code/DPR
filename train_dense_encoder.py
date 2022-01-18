@@ -214,7 +214,7 @@ class BiEncoderTrainer(object):
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
 
-    def validate_and_save(self, epoch: int, iteration: int, scheduler) -> Dict[str, float]:
+    def validate_and_save(self, epoch: int, iteration: int, scheduler, save: bool = True) -> Dict[str, float]:
         metrics: Dict[str, float] = {}
 
         cfg = self.cfg
@@ -236,7 +236,7 @@ class BiEncoderTrainer(object):
             else:
                 validation_loss = metrics["Dev NLL loss"]
 
-        if save_cp:
+        if save_cp and save:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
             logger.info("Saved checkpoint to %s", cp_name)
 
@@ -583,11 +583,11 @@ class BiEncoderTrainer(object):
                     data_iteration,
                     epoch_batches,
                 )
-                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler)
+                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler, save=False)
                 self.biencoder.train()
 
         logger.info("Epoch finished on %d", cfg.local_rank)
-        val_metrics: Dict[str, float] = self.validate_and_save(epoch, data_iteration, scheduler)
+        val_metrics: Dict[str, float] = self.validate_and_save(epoch, data_iteration, scheduler, save=True)
 
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
