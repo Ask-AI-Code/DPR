@@ -224,13 +224,10 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            # average_rank_loss = self.validate_average_rank()
+            average_rank_loss = self.validate_average_rank()
             nll_loss = self.validate_nll()
-            # wandb.log({
-            #     "Dev Average Rank loss": average_rank_loss,
-            #     "Dev NLL loss": nll_loss,
-            # })
             wandb.log({
+                "Dev Average Rank loss": average_rank_loss,
                 "Dev NLL loss": nll_loss,
             })
             if epoch >= cfg.val_av_rank_start_epoch:
@@ -279,6 +276,8 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
+
+            biencoder_input = BiEncoderBatch(**move_to_device(biencoder_input._asdict(), cfg.device))
 
             # get the token to be used for representation selection
             ds_cfg = self.ds_cfg.dev_datasets[dataset]
