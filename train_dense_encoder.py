@@ -224,20 +224,16 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
+            average_rank_loss = self.validate_average_rank()
+            nll_loss = self.validate_nll()
+            wandb.log({
+                "Dev Average Rank loss": average_rank_loss,
+                "Dev NLL loss": nll_loss,
+            })
             if epoch >= cfg.val_av_rank_start_epoch:
-                validation_loss = self.validate_average_rank(iteration, epoch)
-                wandb.log({
-                    "Iteration": iteration,
-                    "Epoch": epoch,
-                    "Dev Average Rank loss": validation_loss,
-                })
+                validation_loss = average_rank_loss
             else:
-                validation_loss = self.validate_nll(iteration, epoch)
-                wandb.log({
-                    "Iteration": iteration,
-                    "Epoch": epoch,
-                    "Dev NLL loss": validation_loss,
-                })
+                validation_loss = nll_loss
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -248,7 +244,7 @@ class BiEncoderTrainer(object):
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
 
-    def validate_nll(self, iteration: int, epoch: int) -> float:
+    def validate_nll(self) -> float:
         logger.info("NLL validation ...")
         cfg = self.cfg
         self.biencoder.eval()
@@ -317,8 +313,6 @@ class BiEncoderTrainer(object):
         )
 
         wandb.log({
-            "Iteration": iteration,
-            "Epoch": epoch,
             "Dev Correct Predictions Ratio": correct_ratio,
             "Dev Total Correct Predictions": total_correct_predictions,
             "Dev Total Samples": total_samples,
@@ -326,7 +320,7 @@ class BiEncoderTrainer(object):
 
         return total_loss
 
-    def validate_average_rank(self, iteration: int, epoch: int) -> float:
+    def validate_average_rank(self) -> float:
         """
         Validates biencoder model using each question's gold passage's rank across the set of passages from the dataset.
         It generates vectors for specified amount of negative passages from each question (see --val_av_rank_xxx params)
@@ -462,8 +456,6 @@ class BiEncoderTrainer(object):
         logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
 
         wandb.log({
-            "Iteration": iteration,
-            "Epoch": epoch,
             "Dev Average Rank Accuracy": av_rank,
             "Dev Total Questions": q_num,
         })
