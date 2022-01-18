@@ -9,17 +9,19 @@
 """
  Pipeline to train DPR Biencoder
 """
-
+import collections
 import logging
 import math
 import os
 import random
 import sys
 import time
+from datetime import datetime
 from typing import Tuple
 
 import hydra
 import torch
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
@@ -54,6 +56,17 @@ logger = logging.getLogger()
 setup_logger(logger)
 
 
+def flatten_dict(d, parent_key='', sep='_'):
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, collections.MutableMapping):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
 class BiEncoderTrainer(object):
     """
     BiEncoder training pipeline component. Can be used to initiate or resume training and validate the trained model
@@ -86,6 +99,8 @@ class BiEncoderTrainer(object):
             cfg.fp16,
             cfg.fp16_opt_level,
         )
+        wandb.watch(model)
+
         self.biencoder = model
         self.optimizer = optimizer
         self.tensorizer = tensorizer
@@ -211,8 +226,18 @@ class BiEncoderTrainer(object):
         else:
             if epoch >= cfg.val_av_rank_start_epoch:
                 validation_loss = self.validate_average_rank()
+                wandb.log({
+                    "Iteration": iteration,
+                    "Epoch": epoch,
+                    "Dev Average Rank loss": validation_loss,
+                })
             else:
                 validation_loss = self.validate_nll()
+                wandb.log({
+                    "Iteration": iteration,
+                    "Epoch": epoch,
+                    "Dev NLL loss": validation_loss,
+                })
 
         if save_cp:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
@@ -514,8 +539,15 @@ class BiEncoderTrainer(object):
                 scheduler.step()
                 self.biencoder.zero_grad()
 
+            lr = self.optimizer.param_groups[0]["lr"]
+            wandb.log({
+                "Iteration": data_iteration,
+                "Epoch": epoch,
+                "Train loss": loss.item(),
+                "lr": lr,
+            })
+
             if i % log_result_step == 0:
-                lr = self.optimizer.param_groups[0]["lr"]
                 logger.info(
                     "Epoch: %d: Step: %d/%d, loss=%f, lr=%f",
                     epoch,
@@ -735,6 +767,14 @@ def _do_biencoder_fwd_pass(
 
 @hydra.main(config_path="conf", config_name="biencoder_train_cfg")
 def main(cfg: DictConfig):
+    wandb.login(key=os.environ["WANDB_API_KEY"])
+
+    wandb.init(project="dpr",
+               entity="ask-ai",
+               name=f"dpr_lr-{cfg.train.learning_rate}_bs-{cfg.train.batch_size}_"
+                    f"{datetime.now().strftime('%d%m%Y_%H%M%S')}",
+               config=flatten_dict(cfg))
+
     if cfg.train.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(

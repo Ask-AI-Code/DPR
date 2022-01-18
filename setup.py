@@ -38,6 +38,7 @@ setup(
         "spacy>=2.1.8",
         "hydra-core>=1.0.0",
         "omegaconf>=2.0.1",
-        "jsonlines"
+        "jsonlines",
+        "wandb>=0.12.9,<0.13"
     ],
 )
