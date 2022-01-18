@@ -593,7 +593,7 @@ class BiEncoderTrainer(object):
         logger.info("Av Loss per epoch=%f", epoch_loss)
         logger.info("epoch total correct predictions=%d", epoch_correct_predictions)
 
-        for key, value in val_metrics:
+        for key, value in val_metrics.items():
             metrics[key] = value
 
         metrics["Iteration"] = data_iteration
