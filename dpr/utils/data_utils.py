@@ -17,7 +17,7 @@ import itertools
 import math
 import torch
 from torch import Tensor as T
-from typing import List, Iterator, Callable, Tuple
+from typing import List, Iterator, Callable, Tuple, Dict
 
 logger = logging.getLogger()
 
@@ -34,7 +34,7 @@ def read_serialized_data_from_files(paths: List[str]) -> List:
     return results
 
 
-def read_data_from_json_files(paths: List[str]) -> List:
+def read_data_from_json_files(paths: List[str]) -> Dict:
     results = []
     for i, path in enumerate(paths):
         with open(path, "r", encoding="utf-8") as f:
