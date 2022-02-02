@@ -381,6 +381,20 @@ RESOURCES_MAP = {
         "compressed": False,
         "desc": "TFIDF index when only Wikipedia pages seen during training are considered",
     },
+    "data.retriever.ask-ai-dpr-dev": {
+        "s3_url": "https://ask-ai-dev.s3.us-east-2.amazonaws.com/training/data/dpr_training_data_yotpo_support_110[…]2_185614_annotations_dpr_annotations_dev.json.gzip",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR dev set",
+        "license_files": NQ_LICENSE_FILES,
+    },
+    "data.retriever.ask-ai-dpr-train": {
+        "s3_url": "https://ask-ai-dev.s3.us-east-2.amazonaws.com/training/data/dpr_training_data_yotpo_support_110[…]2_185614_annotations_dpr_annotations_train.json.gzip",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR training set",
+        "license_files": NQ_LICENSE_FILES,
+    },
 }
 
 

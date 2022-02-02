@@ -9,17 +9,19 @@
 """
  Pipeline to train DPR Biencoder
 """
-
+import collections
 import logging
 import math
 import os
 import random
 import sys
 import time
-from typing import Tuple
+from datetime import datetime
+from typing import Tuple, Dict
 
 import hydra
 import torch
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
@@ -54,6 +56,17 @@ logger = logging.getLogger()
 setup_logger(logger)
 
 
+def flatten_dict(d, parent_key='', sep='_'):
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, collections.MutableMapping):
+            items.extend(flatten_dict(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
 class BiEncoderTrainer(object):
     """
     BiEncoder training pipeline component. Can be used to initiate or resume training and validate the trained model
@@ -86,6 +99,8 @@ class BiEncoderTrainer(object):
             cfg.fp16,
             cfg.fp16_opt_level,
         )
+        wandb.watch(model)
+
         self.biencoder = model
         self.optimizer = optimizer
         self.tensorizer = tensorizer
@@ -193,12 +208,15 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
-            self._train_epoch(scheduler, epoch, eval_step, train_iterator)
+            epoch_metrics: Dict[str, float] = self._train_epoch(scheduler, epoch, eval_step, train_iterator)
+            wandb.log(epoch_metrics)
 
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
 
-    def validate_and_save(self, epoch: int, iteration: int, scheduler):
+    def validate_and_save(self, epoch: int, iteration: int, scheduler, save: bool = True) -> Dict[str, float]:
+        metrics: Dict[str, float] = {}
+
         cfg = self.cfg
         # for distributed mode, save checkpoint for only one process
         save_cp = cfg.local_rank in [-1, 0]
@@ -209,12 +227,16 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            if epoch >= cfg.val_av_rank_start_epoch:
-                validation_loss = self.validate_average_rank()
-            else:
-                validation_loss = self.validate_nll()
+            metrics = self.validate_nll()
+            average_rank_loss = self.validate_average_rank()
+            metrics["Dev Average Rank"] = average_rank_loss
 
-        if save_cp:
+            if epoch >= cfg.val_av_rank_start_epoch:
+                validation_loss = average_rank_loss
+            else:
+                validation_loss = metrics["Dev NLL loss"]
+
+        if save_cp and save:
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
             logger.info("Saved checkpoint to %s", cp_name)
 
@@ -223,8 +245,13 @@ class BiEncoderTrainer(object):
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
 
-    def validate_nll(self) -> float:
+        return metrics
+
+    def validate_nll(self) -> Dict[str, float]:
         logger.info("NLL validation ...")
+
+        metrics: Dict[str, float] = {}
+
         cfg = self.cfg
         self.biencoder.eval()
 
@@ -290,7 +317,13 @@ class BiEncoderTrainer(object):
             total_samples,
             correct_ratio,
         )
-        return total_loss
+
+        metrics["Dev Correct Predictions Ratio"] = correct_ratio
+        metrics["Dev Total Correct Predictions"] = total_correct_predictions
+        metrics["Dev Total Samples"] = total_samples
+        metrics["Dev NLL loss"] = total_loss
+
+        return metrics
 
     def validate_average_rank(self) -> float:
         """
@@ -341,6 +374,9 @@ class BiEncoderTrainer(object):
                 num_other_negatives,
                 shuffle=False,
             )
+
+            biencoder_input = BiEncoderBatch(**move_to_device(biencoder_input._asdict(), cfg.device))
+
             total_ctxs = len(ctx_represenations)
             ctxs_ids = biencoder_input.context_ids
             ctxs_segments = biencoder_input.ctx_segments
@@ -426,6 +462,7 @@ class BiEncoderTrainer(object):
 
         av_rank = float(rank / q_num)
         logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
+
         return av_rank
 
     def _train_epoch(
@@ -434,7 +471,7 @@ class BiEncoderTrainer(object):
         epoch: int,
         eval_step: int,
         train_data_iterator: MultiSetDataIterator,
-    ):
+    ) -> Dict[str, float]:
 
         cfg = self.cfg
         rolling_train_loss = 0.0
@@ -449,6 +486,8 @@ class BiEncoderTrainer(object):
         self.biencoder.train()
         epoch_batches = train_data_iterator.max_iterations
         data_iteration = 0
+
+        metrics: Dict[str, float] = {}
 
         dataset = 0
         for i, samples_batch in enumerate(train_data_iterator.iterate_ds_data(epoch=epoch)):
@@ -514,8 +553,9 @@ class BiEncoderTrainer(object):
                 scheduler.step()
                 self.biencoder.zero_grad()
 
+            lr = self.optimizer.param_groups[0]["lr"]
+
             if i % log_result_step == 0:
-                lr = self.optimizer.param_groups[0]["lr"]
                 logger.info(
                     "Epoch: %d: Step: %d/%d, loss=%f, lr=%f",
                     epoch,
@@ -543,15 +583,24 @@ class BiEncoderTrainer(object):
                     data_iteration,
                     epoch_batches,
                 )
-                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler)
+                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler, save=False)
                 self.biencoder.train()
 
         logger.info("Epoch finished on %d", cfg.local_rank)
-        self.validate_and_save(epoch, data_iteration, scheduler)
+        val_metrics: Dict[str, float] = self.validate_and_save(epoch, data_iteration, scheduler, save=True)
 
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
         logger.info("epoch total correct predictions=%d", epoch_correct_predictions)
+
+        for key, value in val_metrics.items():
+            metrics[key] = value
+
+        metrics["Iteration"] = data_iteration
+        metrics["Epoch"] = epoch
+        metrics["Train loss"] = epoch_loss
+
+        return metrics
 
     def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
         cfg = self.cfg
@@ -735,6 +784,14 @@ def _do_biencoder_fwd_pass(
 
 @hydra.main(config_path="conf", config_name="biencoder_train_cfg")
 def main(cfg: DictConfig):
+    wandb.login(key=os.environ["WANDB_API_KEY"])
+
+    wandb.init(project="dpr",
+               entity="ask-ai",
+               name=f"dpr_lr-{cfg.train.learning_rate}_bs-{cfg.train.batch_size}_"
+                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+               config=flatten_dict(cfg))
+
     if cfg.train.gradient_accumulation_steps < 1:
         raise ValueError(
             "Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
