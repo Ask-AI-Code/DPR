@@ -387,6 +387,8 @@ class BiEncoderTrainer(object):
         scores = sim_score_f(q_represenations, encoded_passages)
         values, indices = torch.sort(scores, dim=1, descending=True)
 
+        indices = indices.tolist()
+
         ir_metrics: List[Dict] = []
         for index, sample in enumerate(all_samples):
             # for each question, get top k passages using their indices
