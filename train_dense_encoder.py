@@ -394,7 +394,7 @@ class BiEncoderTrainer(object):
             retrieved_passages_ids = [
                 passage_index_to_passage_id[passage_index] for passage_index in retrieved_passage_indices
             ]
-            retrieved_passages = [passage_id_to_passage[passage_id][1] for passage_id in retrieved_passages_ids]
+            retrieved_passages = [passage_id_to_passage[passage_id] for passage_id in retrieved_passages_ids]
             sample_ir_metrics: IRMetrics = calculate_ir_scores(sample.positive_passages, retrieved_passages)
 
             if_metrics_dict = {
