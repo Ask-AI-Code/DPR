@@ -237,7 +237,9 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
-            epoch_metrics: Dict[str, float] = self._train_epoch(scheduler, epoch, eval_step, train_iterator, all_passages)
+            epoch_metrics: Dict[str, float] = self._train_epoch(
+                scheduler, epoch, eval_step, train_iterator, all_passages
+            )
             wandb.log(epoch_metrics)
 
         if cfg.local_rank in [-1, 0]:
@@ -301,11 +303,9 @@ class BiEncoderTrainer(object):
         data_iterator = self.dev_iterator
 
         total_loss = 0.0
-        start_time = time.time()
         total_correct_predictions = 0
         num_hard_negatives = cfg.train.hard_negatives
         num_other_negatives = cfg.train.other_negatives
-        log_result_step = cfg.train.log_batch_step
         batches = 0
         dataset = 0
 
@@ -338,13 +338,6 @@ class BiEncoderTrainer(object):
             total_loss += loss.item()
             total_correct_predictions += correct_cnt
             batches += 1
-            if (i + 1) % log_result_step == 0:
-                logger.info(
-                    "Eval step: %d , used_time=%f sec., loss=%f ",
-                    i,
-                    time.time() - start_time,
-                    loss.item(),
-                )
 
         total_loss = total_loss / batches
         total_samples = batches * cfg.train.dev_batch_size * self.distributed_factor
@@ -421,7 +414,11 @@ class BiEncoderTrainer(object):
         all_preds_df = pd.DataFrame(ir_metrics)
         preds_df = (all_preds_df.mean() * 100).round(1)
 
-        return preds_df.to_dict()
+        metrics = preds_df.to_dict()
+
+        logger.info("IR metrics: %s", str(metrics))
+
+        return metrics
 
     def validate_average_rank(self) -> float:
         """
@@ -501,8 +498,6 @@ class BiEncoderTrainer(object):
             num_hard_negatives = 0
             num_other_negatives = 0
 
-        log_result_step = cfg.train.log_batch_step
-
         dataset = 0
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
@@ -573,13 +568,6 @@ class BiEncoderTrainer(object):
             batch_positive_idxs = biencoder_input.is_positive
             positive_idx_per_question.extend([total_ctxs + v for v in batch_positive_idxs])
 
-            if (i + 1) % log_result_step == 0:
-                logger.info(
-                    "Av.rank validation: step %d, computed ctx_vectors %d, q_vectors %d",
-                    i,
-                    len(ctx_represenations),
-                    len(q_represenations),
-                )
         ctx_represenations = torch.cat(ctx_represenations, dim=0)
         q_represenations = torch.cat(q_represenations, dim=0)
 
@@ -696,7 +684,7 @@ class BiEncoderTrainer(object):
                 )
                 rolling_train_loss = 0.0
 
-            if data_iteration % eval_step == 0:
+            if data_iteration % eval_step == 0 and cfg.train.eval_during_epoch:
                 logger.info(
                     "rank=%d, Validation: Epoch: %d Step: %d/%d",
                     cfg.local_rank,
