@@ -266,14 +266,19 @@ class BiEncoderTrainer(object):
             validation_loss = 0
         else:
             # metrics = self.validate_nll()
+            p_at_2 = None
             if all_passages:
                 ask_ai_ir_metrics = self.validate_ask_ai_metrics(all_passages)
                 metrics.update(ask_ai_ir_metrics)
+                p_at_2 = ask_ai_ir_metrics["p@2"]
             average_rank_loss = self.validate_average_rank()
             metrics["Dev Average Rank"] = average_rank_loss
 
             if epoch >= cfg.val_av_rank_start_epoch:
-                validation_loss = average_rank_loss
+                if p_at_2 is not None:
+                    validation_loss = p_at_2
+                else:
+                    validation_loss = average_rank_loss
             else:
                 validation_loss = metrics["Dev NLL loss"]
 
@@ -281,7 +286,11 @@ class BiEncoderTrainer(object):
             cp_name = self._save_checkpoint(scheduler, epoch, iteration)
             logger.info("Saved checkpoint to %s", cp_name)
 
-            if validation_loss < (self.best_validation_result or validation_loss + 1):
+            if (not cfg.train.higher_is_better and (
+                    validation_loss < (self.best_validation_result or validation_loss + 1))) or (
+                    cfg.train.higher_is_better and (
+                    validation_loss > (self.best_validation_result or validation_loss + 1))
+            ):
                 self.best_validation_result = validation_loss
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
