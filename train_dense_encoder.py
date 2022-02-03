@@ -367,7 +367,12 @@ class BiEncoderTrainer(object):
     def validate_ask_ai_metrics(self, all_passages: List[Tuple[object, BiEncoderPassage]]) -> Dict:
         logger.info("AskAI IR metrics")
 
+        passage_id_to_passage = {passage_id: passage for passage_id, passage in all_passages}
+
         encoded_passages_and_ids: List[Tuple[object, np.array]] = self._encode_all_passages(all_passages)
+        passage_index_to_passage_id = {
+            index: passage_and_id[0] for index, passage_and_id in enumerate(encoded_passages_and_ids)
+        }
         encoded_passages = torch.tensor([passage[1] for passage in encoded_passages_and_ids])
 
         q_represenations, _, positive_idx_per_question, all_samples = self._encode_questions_and_passages(
@@ -386,7 +391,10 @@ class BiEncoderTrainer(object):
         for index, sample in enumerate(all_samples):
             # for each question, get top k passages using their indices
             retrieved_passage_indices = indices[index][0:self.cfg.train.top_k]
-            retrieved_passages = [all_passages[passage_index][1] for passage_index in retrieved_passage_indices]
+            retrieved_passages_ids = [
+                passage_index_to_passage_id[passage_index] for passage_index in retrieved_passage_indices
+            ]
+            retrieved_passages = [passage_id_to_passage[passage_id][1] for passage_id in retrieved_passages_ids]
             sample_ir_metrics: IRMetrics = calculate_ir_scores(sample.positive_passages, retrieved_passages)
 
             if_metrics_dict = {
