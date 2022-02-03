@@ -367,7 +367,7 @@ class BiEncoderTrainer(object):
     def validate_ask_ai_metrics(self, all_passages: List[Tuple[object, BiEncoderPassage]]) -> Dict:
         logger.info("AskAI IR metrics")
 
-        encoded_passages_and_ids: List[Tuple[object, np.array]] = self._encode_all_passages(all_passages[0:100])
+        encoded_passages_and_ids: List[Tuple[object, np.array]] = self._encode_all_passages(all_passages)
         encoded_passages = torch.tensor([passage[1] for passage in encoded_passages_and_ids])
 
         q_represenations, _, positive_idx_per_question, all_samples = self._encode_questions_and_passages(
