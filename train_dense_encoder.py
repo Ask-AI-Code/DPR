@@ -289,7 +289,7 @@ class BiEncoderTrainer(object):
             if (not cfg.train.higher_is_better and (
                     validation_loss < (self.best_validation_result or validation_loss + 1))) or (
                     cfg.train.higher_is_better and (
-                    validation_loss > (self.best_validation_result or validation_loss + 1))
+                    validation_loss > (self.best_validation_result or validation_loss - 1))
             ):
                 self.best_validation_result = validation_loss
                 self.best_cp_name = cp_name
