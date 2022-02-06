@@ -283,16 +283,26 @@ class BiEncoderTrainer(object):
                 validation_loss = metrics["Dev NLL loss"]
 
         if save_cp and save:
-            cp_name = self._save_checkpoint(
-                scheduler, epoch, iteration, save_separate_models=cfg.train.save_separate_models
-            )
-            logger.info("Saved checkpoint to %s", cp_name)
+            best_model_found = False
+            cp_name = None
 
             if (not cfg.train.higher_is_better and (
                     validation_loss < (self.best_validation_result or validation_loss + 1))) or (
                     cfg.train.higher_is_better and (
                     validation_loss > (self.best_validation_result or validation_loss - 1))
             ):
+                best_model_found = True
+
+            if not cfg.train.save_best_only or (cfg.train.save_best_only and best_model_found):
+                cp_name = self._save_checkpoint(
+                    scheduler,
+                    epoch,
+                    iteration,
+                    save_separate_models=cfg.train.save_separate_models,
+                    best_model_found=cfg.train.save_best_only and best_model_found
+                )
+
+            if best_model_found and cp_name:
                 self.best_validation_result = validation_loss
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
@@ -707,7 +717,9 @@ class BiEncoderTrainer(object):
                 self.biencoder.train()
 
         logger.info("Epoch finished on %d", cfg.local_rank)
-        val_metrics: Dict[str, float] = self.validate_and_save(epoch, data_iteration, scheduler, all_passages, save=True)
+        val_metrics: Dict[str, float] = self.validate_and_save(
+            epoch, data_iteration, scheduler, all_passages, save=True
+        )
 
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
@@ -722,7 +734,14 @@ class BiEncoderTrainer(object):
 
         return metrics
 
-    def _save_checkpoint(self, scheduler, epoch: int, offset: int, save_separate_models: bool = False) -> str:
+    def _save_checkpoint(
+        self,
+        scheduler,
+        epoch: int,
+        offset: int,
+        save_separate_models: bool = False,
+        best_model_found: bool = False
+    ) -> str:
         cfg = self.cfg
         model_to_save = get_model_obj(self.biencoder)
         if save_separate_models:
@@ -738,7 +757,11 @@ class BiEncoderTrainer(object):
             passage_encoder.save(passage_encoder_cp)
             logger.info("Saved passage encoder at %s", passage_encoder_cp)
 
-        cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "." + str(epoch))
+        if not best_model_found:
+            cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "." + str(epoch))
+        else:
+            cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "_best.cp")
+
         meta_params = get_encoder_params_state_from_cfg(cfg)
         state = CheckpointState(
             model_to_save.get_state_dict(),

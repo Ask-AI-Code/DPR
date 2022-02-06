@@ -31,3 +31,6 @@ higher_is_better: True
 
 # save separate models at the end of each epoch
 save_separate_models: False
+
+# if true, saves only best model
+save_best_only: True
