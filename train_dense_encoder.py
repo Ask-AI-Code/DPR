@@ -762,6 +762,9 @@ class BiEncoderTrainer(object):
         else:
             cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "_best.cp")
 
+        # save tokenizer
+        self.tensorizer.tokenizer.save_pretrained(cfg.output_dir)
+
         meta_params = get_encoder_params_state_from_cfg(cfg)
         state = CheckpointState(
             model_to_save.get_state_dict(),
