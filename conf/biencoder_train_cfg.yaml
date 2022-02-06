@@ -48,4 +48,4 @@ ignore_checkpoint_optimizer: False
 multi_q_encoder: False
 
 # report logs to W&B
-wandb_logs: True
+wandb_logs: False

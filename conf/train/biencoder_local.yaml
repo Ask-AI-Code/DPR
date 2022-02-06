@@ -28,3 +28,6 @@ val_av_rank_max_qs: 10000
 top_k: 1000
 eval_during_epoch: False
 higher_is_better: True
+
+# save separate models at the end of each epoch
+save_separate_models: False

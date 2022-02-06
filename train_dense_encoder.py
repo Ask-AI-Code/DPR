@@ -283,7 +283,9 @@ class BiEncoderTrainer(object):
                 validation_loss = metrics["Dev NLL loss"]
 
         if save_cp and save:
-            cp_name = self._save_checkpoint(scheduler, epoch, iteration)
+            cp_name = self._save_checkpoint(
+                scheduler, epoch, iteration, save_separate_models=cfg.train.save_separate_models
+            )
             logger.info("Saved checkpoint to %s", cp_name)
 
             if (not cfg.train.higher_is_better and (
@@ -720,9 +722,22 @@ class BiEncoderTrainer(object):
 
         return metrics
 
-    def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
+    def _save_checkpoint(self, scheduler, epoch: int, offset: int, save_separate_models: bool = False) -> str:
         cfg = self.cfg
         model_to_save = get_model_obj(self.biencoder)
+        if save_separate_models:
+            # question encoder
+            question_encoder = model_to_save.question_model
+            question_encoder_cp = os.path.join(cfg.output_dir, f"dpr_question_encoder_epoch_{epoch}")
+            question_encoder.save(question_encoder_cp)
+            logger.info("Saved question encoder at %s", question_encoder_cp)
+
+            # passage encoder
+            passage_encoder = model_to_save.ctx_model
+            passage_encoder_cp = os.path.join(cfg.output_dir, f"dpr_passage_encoder_epoch_{epoch}")
+            passage_encoder.save(passage_encoder_cp)
+            logger.info("Saved passage encoder at %s", passage_encoder_cp)
+
         cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "." + str(epoch))
         meta_params = get_encoder_params_state_from_cfg(cfg)
         state = CheckpointState(
