@@ -321,7 +321,7 @@ class BiEncoderTrainer(object):
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
-            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
+
             biencoder_input = BiEncoder.create_biencoder_input2(
                 samples_batch,
                 self.tensorizer,
