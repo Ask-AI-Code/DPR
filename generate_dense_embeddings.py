@@ -21,6 +21,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
+from tqdm import tqdm
 
 from dpr.data.biencoder_data import BiEncoderPassage
 from dpr.models import init_biencoder_components
@@ -39,25 +40,27 @@ setup_logger(logger)
 
 
 def gen_ctx_vectors(
-    cfg: DictConfig,
+    batch_size: int,
+    device: str,
     ctx_rows: List[Tuple[object, BiEncoderPassage]],
     model: nn.Module,
     tensorizer: Tensorizer,
     insert_title: bool = True,
 ) -> List[Tuple[object, np.array]]:
     n = len(ctx_rows)
-    bsz = cfg.batch_size
+    bsz = batch_size
     total = 0
     results = []
-    for j, batch_start in enumerate(range(0, n, bsz)):
+    logger.info("Encoding passages...")
+    for j, batch_start in tqdm(enumerate(range(0, n, bsz)), total=n // bsz):
         batch = ctx_rows[batch_start : batch_start + bsz]
         batch_token_tensors = [
             tensorizer.text_to_tensor(ctx[1].text, title=ctx[1].title if insert_title else None) for ctx in batch
         ]
 
-        ctx_ids_batch = move_to_device(torch.stack(batch_token_tensors, dim=0), cfg.device)
-        ctx_seg_batch = move_to_device(torch.zeros_like(ctx_ids_batch), cfg.device)
-        ctx_attn_mask = move_to_device(tensorizer.get_attn_mask(ctx_ids_batch), cfg.device)
+        ctx_ids_batch = move_to_device(torch.stack(batch_token_tensors, dim=0), device)
+        ctx_seg_batch = move_to_device(torch.zeros_like(ctx_ids_batch), device)
+        ctx_attn_mask = move_to_device(tensorizer.get_attn_mask(ctx_ids_batch), device)
         with torch.no_grad():
             _, out, _ = model(ctx_ids_batch, ctx_seg_batch, ctx_attn_mask)
         out = out.cpu()
@@ -76,8 +79,6 @@ def gen_ctx_vectors(
         else:
             results.extend([(ctx_ids[i], out[i].view(-1).numpy()) for i in range(out.size(0))])
 
-        if total % 10 == 0:
-            logger.info("Encoded passages %d", total)
     return results
 
 
@@ -140,7 +141,7 @@ def main(cfg: DictConfig):
     )
     shard_passages = all_passages[start_idx:end_idx]
 
-    data = gen_ctx_vectors(cfg, shard_passages, encoder, tensorizer, True)
+    data = gen_ctx_vectors(cfg.batch_size, cfg.device, shard_passages, encoder, tensorizer, True)
 
     file = cfg.out_file + "_" + str(cfg.shard_id)
     pathlib.Path(os.path.dirname(file)).mkdir(parents=True, exist_ok=True)

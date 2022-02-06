@@ -395,6 +395,13 @@ RESOURCES_MAP = {
         "desc": "AskAI DPR training set",
         "license_files": NQ_LICENSE_FILES,
     },
+    "data.retriever.ask-ai-dpr-chunks": {
+        "s3_url": "https://ask-ai-dev.s3.us-east-2.amazonaws.com/training/data/dpr_training_data_yotpo_support_110[…]2_185614_annotations_dpr_annotations_train.json.gzip",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR customer chunks",
+        "license_files": NQ_LICENSE_FILES,
+    },
 }
 
 

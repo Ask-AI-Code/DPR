@@ -25,3 +25,8 @@ val_av_rank_hard_neg: 30
 val_av_rank_other_neg: 30
 val_av_rank_bsz: 128
 val_av_rank_max_qs: 10000
+eval_during_epoch: True
+higher_is_better: False
+
+# save separate models at the end of each epoch
+save_separate_models: False

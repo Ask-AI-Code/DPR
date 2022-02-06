@@ -17,15 +17,20 @@ import random
 import sys
 import time
 from datetime import datetime
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 
 import hydra
+import numpy as np
 import torch
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor as T
 from torch import nn
+import pandas as pd
 
+from dpr.data.biencoder_data import get_dpr_files, BiEncoderPassage, BiEncoderSample
+from dpr.metrics.data_classes import IRMetrics
+from dpr.metrics.retriever_metrics_utils import calculate_ir_scores
 from dpr.models import init_biencoder_components
 from dpr.models.biencoder import BiEncoder, BiEncoderNllLoss, BiEncoderBatch
 from dpr.options import (
@@ -40,6 +45,7 @@ from dpr.utils.data_utils import (
     ShardedDataIterator,
     Tensorizer,
     MultiSetDataIterator,
+    read_data_from_json_files,
 )
 from dpr.utils.dist_utils import all_gather_list
 from dpr.utils.model_utils import (
@@ -51,6 +57,7 @@ from dpr.utils.model_utils import (
     get_model_obj,
     load_states_from_checkpoint,
 )
+from generate_dense_embeddings import gen_ctx_vectors
 
 logger = logging.getLogger()
 setup_logger(logger)
@@ -165,6 +172,28 @@ class BiEncoderTrainer(object):
     def run_train(self):
         cfg = self.cfg
 
+        all_passages: List[Tuple[object, BiEncoderPassage]] = []
+        if cfg.customer_chunks:
+            logger.info(f"Reading customer chunks from {cfg.customer_chunks}")
+            customer_chunks_file_paths = get_dpr_files(cfg.customer_chunks)
+            if not customer_chunks_file_paths:
+                raise ValueError(f"File descriptor {cfg.customer_chunks} is not configured.")
+            customer_chunks = read_data_from_json_files(customer_chunks_file_paths)
+
+            logger.info("Converting customer chunks to BiEncoderPassage objects")
+            if customer_chunks:
+                for customer_name, chunks in customer_chunks.items():
+                    all_passages.extend([
+                        (chunk["chunk_index"], BiEncoderPassage(
+                            text=chunk["chunk"],
+                            title=chunk["title"],
+                            url=chunk["url"],
+                            chunk_index=chunk["chunk_index"],
+                            chunk_meta=chunk["meta"],
+                            customer_name=customer_name
+                        )) for chunk in chunks.values()
+                    ])
+
         train_iterator = self.get_data_iterator(
             cfg.train.batch_size,
             True,
@@ -208,13 +237,22 @@ class BiEncoderTrainer(object):
 
         for epoch in range(self.start_epoch, int(cfg.train.num_train_epochs)):
             logger.info("***** Epoch %d *****", epoch)
-            epoch_metrics: Dict[str, float] = self._train_epoch(scheduler, epoch, eval_step, train_iterator)
+            epoch_metrics: Dict[str, float] = self._train_epoch(
+                scheduler, epoch, eval_step, train_iterator, all_passages
+            )
             wandb.log(epoch_metrics)
 
         if cfg.local_rank in [-1, 0]:
             logger.info("Training finished. Best validation checkpoint %s", self.best_cp_name)
 
-    def validate_and_save(self, epoch: int, iteration: int, scheduler, save: bool = True) -> Dict[str, float]:
+    def validate_and_save(
+        self,
+        epoch: int,
+        iteration: int,
+        scheduler,
+        all_passages: List[Tuple[object, BiEncoderPassage]],
+        save: bool = True,
+    ) -> Dict[str, float]:
         metrics: Dict[str, float] = {}
 
         cfg = self.cfg
@@ -228,19 +266,43 @@ class BiEncoderTrainer(object):
             validation_loss = 0
         else:
             metrics = self.validate_nll()
+            p_at_2 = None
+            if all_passages:
+                ask_ai_ir_metrics = self.validate_ask_ai_metrics(all_passages)
+                metrics.update(ask_ai_ir_metrics)
+                p_at_2 = ask_ai_ir_metrics["p@2"]
             average_rank_loss = self.validate_average_rank()
             metrics["Dev Average Rank"] = average_rank_loss
 
             if epoch >= cfg.val_av_rank_start_epoch:
-                validation_loss = average_rank_loss
+                if p_at_2 is not None:
+                    validation_loss = p_at_2
+                else:
+                    validation_loss = average_rank_loss
             else:
                 validation_loss = metrics["Dev NLL loss"]
 
         if save_cp and save:
-            cp_name = self._save_checkpoint(scheduler, epoch, iteration)
-            logger.info("Saved checkpoint to %s", cp_name)
+            best_model_found = False
+            cp_name = None
 
-            if validation_loss < (self.best_validation_result or validation_loss + 1):
+            if (not cfg.train.higher_is_better and (
+                    validation_loss < (self.best_validation_result or validation_loss + 1))) or (
+                    cfg.train.higher_is_better and (
+                    validation_loss > (self.best_validation_result or validation_loss - 1))
+            ):
+                best_model_found = True
+
+            if not cfg.train.save_best_only or (cfg.train.save_best_only and best_model_found):
+                cp_name = self._save_checkpoint(
+                    scheduler,
+                    epoch,
+                    iteration,
+                    save_separate_models=cfg.train.save_separate_models,
+                    best_model_found=cfg.train.save_best_only and best_model_found
+                )
+
+            if best_model_found and cp_name:
                 self.best_validation_result = validation_loss
                 self.best_cp_name = cp_name
                 logger.info("New Best validation checkpoint %s", cp_name)
@@ -262,18 +324,16 @@ class BiEncoderTrainer(object):
         data_iterator = self.dev_iterator
 
         total_loss = 0.0
-        start_time = time.time()
         total_correct_predictions = 0
         num_hard_negatives = cfg.train.hard_negatives
         num_other_negatives = cfg.train.other_negatives
-        log_result_step = cfg.train.log_batch_step
         batches = 0
         dataset = 0
 
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
-            logger.info("Eval step: %d ,rnk=%s", i, cfg.local_rank)
+
             biencoder_input = BiEncoder.create_biencoder_input2(
                 samples_batch,
                 self.tensorizer,
@@ -299,13 +359,6 @@ class BiEncoderTrainer(object):
             total_loss += loss.item()
             total_correct_predictions += correct_cnt
             batches += 1
-            if (i + 1) % log_result_step == 0:
-                logger.info(
-                    "Eval step: %d , used_time=%f sec., loss=%f ",
-                    i,
-                    time.time() - start_time,
-                    loss.item(),
-                )
 
         total_loss = total_loss / batches
         total_samples = batches * cfg.train.dev_batch_size * self.distributed_factor
@@ -325,6 +378,69 @@ class BiEncoderTrainer(object):
 
         return metrics
 
+    def validate_ask_ai_metrics(self, all_passages: List[Tuple[object, BiEncoderPassage]]) -> Dict:
+        logger.info("AskAI IR metrics")
+
+        passage_id_to_passage = {passage_id: passage for passage_id, passage in all_passages}
+
+        encoded_passages_and_ids: List[Tuple[object, np.array]] = self._encode_all_passages(all_passages)
+        passage_index_to_passage_id = {
+            index: passage_and_id[0] for index, passage_and_id in enumerate(encoded_passages_and_ids)
+        }
+        encoded_passages = torch.tensor([passage[1] for passage in encoded_passages_and_ids])
+
+        q_represenations, _, positive_idx_per_question, all_samples = self._encode_questions_and_passages(
+            without_negatives=True, return_samples=True,
+        )
+
+        logger.info("AskAI IR validation: total q_vectors size=%s", q_represenations.size())
+        logger.info("AskAI IR validation: total ctx_vectors size=%s", encoded_passages.size())
+
+        # compute similarity score between all questions to all passages
+        sim_score_f = BiEncoderNllLoss.get_similarity_function()
+        scores = sim_score_f(q_represenations, encoded_passages)
+        values, indices = torch.sort(scores, dim=1, descending=True)
+
+        indices = indices.tolist()
+
+        ir_metrics: List[Dict] = []
+        for index, sample in enumerate(all_samples):
+            # for each question, get top k passages using their indices
+            retrieved_passage_indices = indices[index][0:self.cfg.train.top_k]
+            retrieved_passages_ids = [
+                passage_index_to_passage_id[passage_index] for passage_index in retrieved_passage_indices
+            ]
+            retrieved_passages = [passage_id_to_passage[passage_id] for passage_id in retrieved_passages_ids]
+            sample_ir_metrics: IRMetrics = calculate_ir_scores(sample.positive_passages, retrieved_passages)
+
+            if_metrics_dict = {
+                "p@1": sample_ir_metrics.rank_to_p_metrics[1].precision,
+                "p@2": sample_ir_metrics.rank_to_p_metrics[2].precision,
+                "p@5": sample_ir_metrics.rank_to_p_metrics[5].precision,
+                "p@30": sample_ir_metrics.rank_to_p_metrics[30].precision,
+                "url_rank": sample_ir_metrics.article_hit_scores_rank,
+                "section_rank": sample_ir_metrics.section_hit_scores_rank,
+                "p1_Url": sample_ir_metrics.rank_to_p_metrics[1].url,
+                "p2_Url": sample_ir_metrics.rank_to_p_metrics[2].url,
+                "p5_Url": sample_ir_metrics.rank_to_p_metrics[5].url,
+                "p30_Url": sample_ir_metrics.rank_to_p_metrics[30].url,
+                "p1_Section": sample_ir_metrics.rank_to_p_metrics[1].section,
+                "p2_Section": sample_ir_metrics.rank_to_p_metrics[2].section,
+                "p5_Section": sample_ir_metrics.rank_to_p_metrics[5].section,
+                "p30_Section": sample_ir_metrics.rank_to_p_metrics[30].section,
+            }
+
+            ir_metrics.append(if_metrics_dict)
+
+        all_preds_df = pd.DataFrame(ir_metrics)
+        preds_df = (all_preds_df.mean() * 100).round(1)
+
+        metrics = preds_df.to_dict()
+
+        logger.info("IR metrics: %s", str(metrics))
+
+        return metrics
+
     def validate_average_rank(self) -> float:
         """
         Validates biencoder model using each question's gold passage's rank across the set of passages from the dataset.
@@ -337,34 +453,83 @@ class BiEncoderTrainer(object):
         """
         logger.info("Average rank validation ...")
 
-        cfg = self.cfg
         self.biencoder.eval()
-        distributed_factor = self.distributed_factor
+
+        q_represenations, ctx_represenations, positive_idx_per_question, _ = self._encode_questions_and_passages()
+
+        logger.info("Av.rank validation: total q_vectors size=%s", q_represenations.size())
+        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_represenations.size())
+
+        q_num = q_represenations.size(0)
+        assert q_num == len(positive_idx_per_question)
+
+        sim_score_f = BiEncoderNllLoss.get_similarity_function()
+
+        scores = sim_score_f(q_represenations, ctx_represenations)
+        values, indices = torch.sort(scores, dim=1, descending=True)
+
+        rank = 0
+        for i, idx in enumerate(positive_idx_per_question):
+            # aggregate the rank of the known gold passage in the sorted results for each question
+            gold_idx = (indices[i] == idx).nonzero()
+            rank += gold_idx.item()
+
+        if self.distributed_factor > 1:
+            # each node calcuated its own rank, exchange the information between node and calculate the "global" average rank
+            # NOTE: the set of passages is still unique for every node
+            eval_stats = all_gather_list([rank, q_num], max_size=100)
+            for i, item in enumerate(eval_stats):
+                remote_rank, remote_q_num = item
+                if i != self.cfg.local_rank:
+                    rank += remote_rank
+                    q_num += remote_q_num
+
+        av_rank = float(rank / q_num)
+        logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
+
+        return av_rank
+
+    def _encode_all_passages(self, all_passages: List[Tuple[object, BiEncoderPassage]]) -> List[Tuple[object, np.array]]:
+        encoded_passages: List[Tuple[object, np.array]] = gen_ctx_vectors(
+            self.cfg.train.val_av_rank_bsz, self.cfg.device, all_passages, self.biencoder.ctx_model, self.tensorizer
+        )
+        return encoded_passages
+
+    def _encode_questions_and_passages(self, without_negatives: bool = False, return_samples: bool = False):
+        q_represenations = []
+        ctx_represenations = []
+        positive_idx_per_question = []
+        all_samples: List[BiEncoderSample] = []
+
+        cfg = self.cfg
 
         if not self.dev_iterator:
             self.dev_iterator = self.get_data_iterator(
                 cfg.train.dev_batch_size, False, shuffle=False, rank=cfg.local_rank
             )
+
         data_iterator = self.dev_iterator
 
         sub_batch_size = cfg.train.val_av_rank_bsz
-        sim_score_f = BiEncoderNllLoss.get_similarity_function()
-        q_represenations = []
-        ctx_represenations = []
-        positive_idx_per_question = []
 
         num_hard_negatives = cfg.train.val_av_rank_hard_neg
         num_other_negatives = cfg.train.val_av_rank_other_neg
 
-        log_result_step = cfg.train.log_batch_step
+        if without_negatives:
+            num_hard_negatives = 0
+            num_other_negatives = 0
+
         dataset = 0
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
-            if len(q_represenations) > cfg.train.val_av_rank_max_qs / distributed_factor:
+            if len(q_represenations) > cfg.train.val_av_rank_max_qs / self.distributed_factor:
                 break
 
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
+
+            if return_samples:
+                all_samples.extend(samples_batch)
 
             biencoder_input = BiEncoder.create_biencoder_input2(
                 samples_batch,
@@ -399,8 +564,8 @@ class BiEncoderTrainer(object):
                     # otherwise the other input tensors will be split but only the first split will be called
                     continue
 
-                ctx_ids_batch = ctxs_ids[batch_start : batch_start + sub_batch_size]
-                ctx_seg_batch = ctxs_segments[batch_start : batch_start + sub_batch_size]
+                ctx_ids_batch = ctxs_ids[batch_start: batch_start + sub_batch_size]
+                ctx_seg_batch = ctxs_segments[batch_start: batch_start + sub_batch_size]
 
                 q_attn_mask = self.tensorizer.get_attn_mask(q_ids)
                 ctx_attn_mask = self.tensorizer.get_attn_mask(ctx_ids_batch)
@@ -424,46 +589,10 @@ class BiEncoderTrainer(object):
             batch_positive_idxs = biencoder_input.is_positive
             positive_idx_per_question.extend([total_ctxs + v for v in batch_positive_idxs])
 
-            if (i + 1) % log_result_step == 0:
-                logger.info(
-                    "Av.rank validation: step %d, computed ctx_vectors %d, q_vectors %d",
-                    i,
-                    len(ctx_represenations),
-                    len(q_represenations),
-                )
-
         ctx_represenations = torch.cat(ctx_represenations, dim=0)
         q_represenations = torch.cat(q_represenations, dim=0)
 
-        logger.info("Av.rank validation: total q_vectors size=%s", q_represenations.size())
-        logger.info("Av.rank validation: total ctx_vectors size=%s", ctx_represenations.size())
-
-        q_num = q_represenations.size(0)
-        assert q_num == len(positive_idx_per_question)
-
-        scores = sim_score_f(q_represenations, ctx_represenations)
-        values, indices = torch.sort(scores, dim=1, descending=True)
-
-        rank = 0
-        for i, idx in enumerate(positive_idx_per_question):
-            # aggregate the rank of the known gold passage in the sorted results for each question
-            gold_idx = (indices[i] == idx).nonzero()
-            rank += gold_idx.item()
-
-        if distributed_factor > 1:
-            # each node calcuated its own rank, exchange the information between node and calculate the "global" average rank
-            # NOTE: the set of passages is still unique for every node
-            eval_stats = all_gather_list([rank, q_num], max_size=100)
-            for i, item in enumerate(eval_stats):
-                remote_rank, remote_q_num = item
-                if i != cfg.local_rank:
-                    rank += remote_rank
-                    q_num += remote_q_num
-
-        av_rank = float(rank / q_num)
-        logger.info("Av.rank validation: average rank %s, total questions=%d", av_rank, q_num)
-
-        return av_rank
+        return q_represenations, ctx_represenations, positive_idx_per_question, all_samples
 
     def _train_epoch(
         self,
@@ -471,6 +600,7 @@ class BiEncoderTrainer(object):
         epoch: int,
         eval_step: int,
         train_data_iterator: MultiSetDataIterator,
+        all_passages: List[Tuple[object, BiEncoderPassage]],
     ) -> Dict[str, float]:
 
         cfg = self.cfg
@@ -575,7 +705,7 @@ class BiEncoderTrainer(object):
                 )
                 rolling_train_loss = 0.0
 
-            if data_iteration % eval_step == 0:
+            if data_iteration % eval_step == 0 and cfg.train.eval_during_epoch:
                 logger.info(
                     "rank=%d, Validation: Epoch: %d Step: %d/%d",
                     cfg.local_rank,
@@ -583,11 +713,13 @@ class BiEncoderTrainer(object):
                     data_iteration,
                     epoch_batches,
                 )
-                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler, save=False)
+                self.validate_and_save(epoch, train_data_iterator.get_iteration(), scheduler, all_passages, save=False)
                 self.biencoder.train()
 
         logger.info("Epoch finished on %d", cfg.local_rank)
-        val_metrics: Dict[str, float] = self.validate_and_save(epoch, data_iteration, scheduler, save=True)
+        val_metrics: Dict[str, float] = self.validate_and_save(
+            epoch, data_iteration, scheduler, all_passages, save=True
+        )
 
         epoch_loss = (epoch_loss / epoch_batches) if epoch_batches > 0 else 0
         logger.info("Av Loss per epoch=%f", epoch_loss)
@@ -602,10 +734,37 @@ class BiEncoderTrainer(object):
 
         return metrics
 
-    def _save_checkpoint(self, scheduler, epoch: int, offset: int) -> str:
+    def _save_checkpoint(
+        self,
+        scheduler,
+        epoch: int,
+        offset: int,
+        save_separate_models: bool = False,
+        best_model_found: bool = False
+    ) -> str:
         cfg = self.cfg
         model_to_save = get_model_obj(self.biencoder)
-        cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "." + str(epoch))
+        if save_separate_models:
+            # question encoder
+            question_encoder = model_to_save.question_model
+            question_encoder_cp = os.path.join(cfg.output_dir, f"dpr_question_encoder_epoch_{epoch}")
+            question_encoder.save(question_encoder_cp)
+            logger.info("Saved question encoder at %s", question_encoder_cp)
+
+            # passage encoder
+            passage_encoder = model_to_save.ctx_model
+            passage_encoder_cp = os.path.join(cfg.output_dir, f"dpr_passage_encoder_epoch_{epoch}")
+            passage_encoder.save(passage_encoder_cp)
+            logger.info("Saved passage encoder at %s", passage_encoder_cp)
+
+        if not best_model_found:
+            cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "." + str(epoch))
+        else:
+            cp = os.path.join(cfg.output_dir, cfg.checkpoint_file_name + "_best.cp")
+
+        # save tokenizer
+        self.tensorizer.tokenizer.save_pretrained(cfg.output_dir)
+
         meta_params = get_encoder_params_state_from_cfg(cfg)
         state = CheckpointState(
             model_to_save.get_state_dict(),
@@ -790,7 +949,9 @@ def main(cfg: DictConfig):
                entity="ask-ai",
                name=f"dpr_lr-{cfg.train.learning_rate}_bs-{cfg.train.batch_size}_"
                     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-               config=flatten_dict(cfg))
+               config=flatten_dict(cfg),
+               mode="disabled" if not cfg.wandb_logs else None,
+   )
 
     if cfg.train.gradient_accumulation_steps < 1:
         raise ValueError(

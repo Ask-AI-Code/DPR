@@ -4,7 +4,8 @@ import glob
 import logging
 import os
 import random
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
 
 import hydra
 import jsonlines
@@ -17,7 +18,16 @@ from dpr.data.tables import Table
 from dpr.utils.data_utils import read_data_from_json_files, Tensorizer
 
 logger = logging.getLogger(__name__)
-BiEncoderPassage = collections.namedtuple("BiEncoderPassage", ["text", "title"])
+
+
+@dataclass
+class BiEncoderPassage:
+    text: str
+    title: str
+    url: Optional[str] = None
+    chunk_index: Optional[int] = None
+    chunk_meta: Optional[Dict] = None
+    customer_name: Optional[str] = None
 
 
 class BiEncoderSample(object):
@@ -163,8 +173,12 @@ class JsonQADataset(Dataset):
 
         def create_passage(ctx: dict):
             return BiEncoderPassage(
-                normalize_passage(ctx["text"]) if self.normalize else ctx["text"],
-                ctx["title"],
+                text=normalize_passage(ctx["text"]) if self.normalize else ctx["text"],
+                title=ctx["title"],
+                url=ctx["url"] if "url" in ctx else None,
+                chunk_index=ctx["chunk_index"] if "chunk_index" in ctx else None,
+                chunk_meta=ctx["chunk_meta"] if "chunk_meta" in ctx else None,
+                customer_name=ctx["customer_name"] if "customer_name" in ctx else None,
             )
 
         r.positive_passages = [create_passage(ctx) for ctx in positive_ctxs]

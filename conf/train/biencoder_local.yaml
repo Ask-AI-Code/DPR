@@ -17,7 +17,7 @@ warmup_steps: 0
 gradient_accumulation_steps: 1
 
 # Total number of training epochs to perform.
-num_train_epochs: 20
+num_train_epochs: 40
 eval_per_epoch: 1
 hard_negatives: 1
 other_negatives: 0
@@ -25,3 +25,12 @@ val_av_rank_hard_neg: 30
 val_av_rank_other_neg: 30
 val_av_rank_bsz: 128
 val_av_rank_max_qs: 10000
+top_k: 1000
+eval_during_epoch: False
+higher_is_better: True
+
+# save separate models at the end of each epoch
+save_separate_models: False
+
+# if true, saves only best model
+save_best_only: True

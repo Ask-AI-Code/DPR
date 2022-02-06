@@ -10,6 +10,7 @@ Encoder model wrappers based on HuggingFace code
 """
 
 import logging
+import os
 from typing import Tuple
 
 import torch
@@ -220,6 +221,14 @@ class HFBertEncoder(BertModel):
         if self.encode_proj:
             return self.encode_proj.out_features
         return self.config.hidden_size
+
+    def save(self, output_dir: str):
+        # If we are executing this function, we are the process zero, so we don't check for that.
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving model checkpoint to {output_dir}")
+        # Save a trained model and configuration using `save_pretrained()`.
+        # They can then be reloaded using `from_pretrained()`
+        self.save_pretrained(output_dir)
 
 
 class BertTensorizer(Tensorizer):
