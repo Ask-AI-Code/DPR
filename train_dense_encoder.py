@@ -265,7 +265,7 @@ class BiEncoderTrainer(object):
         if not cfg.dev_datasets:
             validation_loss = 0
         else:
-            # metrics = self.validate_nll()
+            metrics = self.validate_nll()
             p_at_2 = None
             if all_passages:
                 ask_ai_ir_metrics = self.validate_ask_ai_metrics(all_passages)
