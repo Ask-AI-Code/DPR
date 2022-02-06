@@ -909,7 +909,7 @@ def main(cfg: DictConfig):
                name=f"dpr_lr-{cfg.train.learning_rate}_bs-{cfg.train.batch_size}_"
                     f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
                config=flatten_dict(cfg),
-               # mode="disabled"
+               mode="disabled" if not cfg.wandb_logs else None,
    )
 
     if cfg.train.gradient_accumulation_steps < 1:
