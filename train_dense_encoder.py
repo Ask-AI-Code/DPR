@@ -266,17 +266,17 @@ class BiEncoderTrainer(object):
             validation_loss = 0
         else:
             metrics = self.validate_nll()
-            p_at_2 = None
+            p_at_30 = None
             if all_passages:
                 ask_ai_ir_metrics = self.validate_ask_ai_metrics(all_passages)
                 metrics.update(ask_ai_ir_metrics)
-                p_at_2 = ask_ai_ir_metrics["p@2"]
+                p_at_30 = ask_ai_ir_metrics["p@30"]
             average_rank_loss = self.validate_average_rank()
             metrics["Dev Average Rank"] = average_rank_loss
 
             if epoch >= cfg.val_av_rank_start_epoch:
-                if p_at_2 is not None:
-                    validation_loss = p_at_2
+                if p_at_30 is not None:
+                    validation_loss = p_at_30
                 else:
                     validation_loss = average_rank_loss
             else:
