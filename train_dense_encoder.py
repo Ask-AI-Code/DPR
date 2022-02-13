@@ -15,7 +15,6 @@ import math
 import os
 import random
 import sys
-import time
 from datetime import datetime
 from typing import Tuple, Dict, List
 
@@ -32,7 +31,7 @@ from dpr.data.biencoder_data import get_dpr_files, BiEncoderPassage, BiEncoderSa
 from dpr.metrics.data_classes import IRMetrics
 from dpr.metrics.retriever_metrics_utils import calculate_ir_scores
 from dpr.models import init_biencoder_components
-from dpr.models.biencoder import BiEncoder, BiEncoderNllLoss, BiEncoderBatch
+from dpr.models.biencoder import BiEncoderNllLoss, BiEncoderBatch
 from dpr.options import (
     setup_cfg_gpu,
     set_seed,
@@ -45,6 +44,7 @@ from dpr.utils.data_utils import (
     ShardedDataIterator,
     Tensorizer,
     MultiSetDataIterator,
+    LocalShardedDataIterator,
     read_data_from_json_files,
 )
 from dpr.utils.dist_utils import all_gather_list
@@ -142,14 +142,10 @@ class BiEncoderTrainer(object):
             self.ds_cfg.train_datasets_names if is_train_set else self.ds_cfg.dev_datasets_names,
         )
 
-        # randomized data loading to avoid file system congestion
-        datasets_list = [ds for ds in hydra_datasets]
-        rnd = random.Random(rank)
-        rnd.shuffle(datasets_list)
-        [ds.load_data() for ds in datasets_list]
+        single_ds_iterator_cls = LocalShardedDataIterator if self.cfg.local_shards_dataloader else ShardedDataIterator
 
         sharded_iterators = [
-            ShardedDataIterator(
+            single_ds_iterator_cls(
                 ds,
                 shard_id=self.shard_id,
                 num_shards=self.distributed_factor,
@@ -329,12 +325,13 @@ class BiEncoderTrainer(object):
         num_other_negatives = cfg.train.other_negatives
         batches = 0
         dataset = 0
+        biencoder = get_model_obj(self.biencoder)
 
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             if isinstance(samples_batch, Tuple):
                 samples_batch, dataset = samples_batch
 
-            biencoder_input = BiEncoder.create_biencoder_input2(
+            biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
                 True,
@@ -520,6 +517,7 @@ class BiEncoderTrainer(object):
             num_other_negatives = 0
 
         dataset = 0
+        biencoder = get_model_obj(self.biencoder)
         for i, samples_batch in enumerate(data_iterator.iterate_ds_data()):
             # samples += 1
             if len(q_represenations) > cfg.train.val_av_rank_max_qs / self.distributed_factor:
@@ -531,7 +529,7 @@ class BiEncoderTrainer(object):
             if return_samples:
                 all_samples.extend(samples_batch)
 
-            biencoder_input = BiEncoder.create_biencoder_input2(
+            biencoder_input = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
                 True,
@@ -619,6 +617,7 @@ class BiEncoderTrainer(object):
 
         metrics: Dict[str, float] = {}
 
+        biencoder = get_model_obj(self.biencoder)
         dataset = 0
         for i, samples_batch in enumerate(train_data_iterator.iterate_ds_data(epoch=epoch)):
             if isinstance(samples_batch, Tuple):
@@ -633,7 +632,7 @@ class BiEncoderTrainer(object):
             data_iteration = train_data_iterator.get_iteration()
             random.seed(seed + epoch + data_iteration)
 
-            biencoder_batch = BiEncoder.create_biencoder_input2(
+            biencoder_batch = biencoder.create_biencoder_input(
                 samples_batch,
                 self.tensorizer,
                 True,
@@ -645,7 +644,7 @@ class BiEncoderTrainer(object):
             )
 
             # get the token to be used for representation selection
-            from dpr.data.biencoder_data import DEFAULT_SELECTOR
+            from dpr.utils.data_utils import DEFAULT_SELECTOR
 
             selector = ds_cfg.selector if ds_cfg else DEFAULT_SELECTOR
 
@@ -668,7 +667,6 @@ class BiEncoderTrainer(object):
 
             if cfg.fp16:
                 from apex import amp
-
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
                 if cfg.train.max_grad_norm > 0:
@@ -797,15 +795,16 @@ class BiEncoderTrainer(object):
         model_to_load = get_model_obj(self.biencoder)
         logger.info("Loading saved model state ...")
 
-        model_to_load.load_state(saved_state)
-
+        model_to_load.load_state(saved_state, strict=True)
+        logger.info("Saved state loaded")
         if not self.cfg.ignore_checkpoint_optimizer:
             if saved_state.optimizer_dict:
-                logger.info("Loading saved optimizer state ...")
+                logger.info("Using saved optimizer state")
                 self.optimizer.load_state_dict(saved_state.optimizer_dict)
 
-            if saved_state.scheduler_dict:
-                self.scheduler_state = saved_state.scheduler_dict
+        if not self.cfg.ignore_checkpoint_lr and saved_state.scheduler_dict:
+            logger.info("Using saved scheduler_state")
+            self.scheduler_state = saved_state.scheduler_dict
 
 
 def _calc_loss(
@@ -879,6 +878,17 @@ def _calc_loss(
     return loss, is_correct
 
 
+def _print_norms(model):
+    total_norm = 0
+    for n, p in model.named_parameters():
+        if p.grad is None:
+            continue
+        param_norm = p.grad.data.norm(2)
+        total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** (1.0 / 2)
+    return total_norm
+
+
 def _do_biencoder_fwd_pass(
     model: nn.Module,
     input: BiEncoderBatch,
@@ -931,7 +941,6 @@ def _do_biencoder_fwd_pass(
         input.hard_negatives,
         loss_scale=loss_scale,
     )
-
     is_correct = is_correct.sum().item()
 
     if cfg.n_gpu > 1:
