@@ -1,9 +1,9 @@
-import collections
 import csv
 import json
 import logging
 import pickle
-from typing import Dict, List
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 import hydra
 import jsonlines
@@ -11,18 +11,38 @@ import torch
 from omegaconf import DictConfig
 
 from dpr.data.biencoder_data import (
-    BiEncoderPassage,
     normalize_passage,
     get_dpr_files,
     read_nq_tables_jsonl,
     split_tables_to_chunks,
 )
-
 from dpr.utils.data_utils import normalize_question
 
 logger = logging.getLogger(__name__)
 
-TableChunk = collections.namedtuple("TableChunk", ["text", "title", "table_id"])
+
+@dataclass
+class TableChunk:
+    text: str
+    title: str
+    table_id: int
+
+
+@dataclass
+class BiEncoderPassage:
+    text: str
+    title: str
+    url: Optional[str] = None
+    chunk_index: Optional[int] = None
+    chunk_meta: Optional[Dict] = None
+    customer_name: Optional[str] = None
+
+
+class BiEncoderSample(object):
+    query: str
+    positive_passages: List[BiEncoderPassage]
+    negative_passages: List[BiEncoderPassage]
+    hard_negative_passages: List[BiEncoderPassage]
 
 
 class QASample:

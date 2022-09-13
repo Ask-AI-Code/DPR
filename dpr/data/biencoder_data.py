@@ -3,27 +3,17 @@ import glob
 import logging
 import os
 import random
-from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import jsonlines
 import numpy as np
 from omegaconf import DictConfig
 
+from dpr.data.retriever_data import BiEncoderPassage, BiEncoderSample
 from dpr.data.tables import Table
 from dpr.utils.data_utils import read_data_from_json_files, Dataset
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class BiEncoderPassage:
-    text: str
-    title: str
-    url: Optional[str] = None
-    chunk_index: Optional[int] = None
-    chunk_meta: Optional[Dict] = None
-    customer_name: Optional[str] = None
 
 
 def get_dpr_files(source_name) -> List[str]:
@@ -33,13 +23,6 @@ def get_dpr_files(source_name) -> List[str]:
         # try to use data downloader
         from dpr.data.download_data import download
         return download(source_name)
-
-
-class BiEncoderSample(object):
-    query: str
-    positive_passages: List[BiEncoderPassage]
-    negative_passages: List[BiEncoderPassage]
-    hard_negative_passages: List[BiEncoderPassage]
 
 
 class JsonQADataset(Dataset):
