@@ -67,3 +67,11 @@ askai_train_without_q_mark:
 askai_dev_without_q_mark:
   _target_: dpr.data.biencoder_data.JsonQADataset
   file: data.retriever.yotpo_support_200222_1126_wo_q_mark.ask-ai-dpr-dev
+
+dpr_training_data_yotpo_support_130922_135348_dev:
+  _target_: dpr.data.biencoder_data.JsonQADataset
+  file: data.retriever.dpr_training_data_yotpo_support_130922_135348.ask-ai-dpr-dev
+
+dpr_training_data_yotpo_support_130922_135348_train:
+  _target_: dpr.data.biencoder_data.JsonQADataset
+  file: data.retriever.dpr_training_data_yotpo_support_130922_135348.ask-ai-dpr-train
