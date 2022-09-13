@@ -444,6 +444,27 @@ RESOURCES_MAP = {
         "desc": "AskAI DPR customer chunks without question marks",
         "license_files": NQ_LICENSE_FILES,
     },
+    "data.retriever.dpr_training_data_yotpo_support_130922_135348.ask-ai-dpr-train": {
+        "s3_url": "s3://ask-ai-dev/training/data/dpr_training_data_yotpo_support_130922_135348/dpr_training_data_yotpo_support_130922_135348_annotations_dpr_annotations_train.json.gz",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR training dpr_training_data_yotpo_support_130922_135348",
+        "license_files": NQ_LICENSE_FILES,
+    },
+    "data.retriever.dpr_training_data_yotpo_support_130922_135348.ask-ai-dpr-dev": {
+        "s3_url": "s3://ask-ai-dev/training/data/dpr_training_data_yotpo_support_130922_135348/dpr_training_data_yotpo_support_130922_135348_annotations_dpr_annotations_dev.json.gz",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR dev dpr_training_data_yotpo_support_130922_135348",
+        "license_files": NQ_LICENSE_FILES,
+    },
+    "data.retriever.dpr_training_data_yotpo_support_130922_135348.ask-ai-dpr-chunks": {
+        "s3_url": "s3://ask-ai-dev/training/data/dpr_training_data_yotpo_support_130922_135348/dpr_training_data_yotpo_support_130922_135348_customer_chunks_all.json.gz",
+        "original_ext": ".json",
+        "compressed": True,
+        "desc": "AskAI DPR customer chunks dpr_training_data_yotpo_support_130922_135348",
+        "license_files": NQ_LICENSE_FILES,
+    },
 }
 
 
